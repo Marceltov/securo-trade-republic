@@ -7,8 +7,10 @@ is the complete list of what this client can ask for.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
+import urllib.parse
 import json
 import re
 import time
@@ -22,6 +24,10 @@ APP_VERSION = '2.2631.13'
 WEB_PLATFORM = 'web-pro'
 COOKIE_NAMES = frozenset({'tr_session', 'tr_refresh', 'tr_device', 'tr_claims', 'tr_external_id', 'JSESSIONID'})
 POLL_SECONDS = 2
+# Everything this client can subscribe to. None of them changes anything at Trade Republic.
+ALLOWED_SUBSCRIPTIONS = frozenset({'cash', 'compactPortfolioByType', 'timelineTransactions', 'timelineDetailV2', 'instrument'})
+WS_CONNECT = {'locale': 'de', 'platformId': 'webtrading', 'platformVersion': 'chrome - 146.0.0.0',
+              'clientId': 'app.traderepublic.com', 'clientVersion': '5582'}
 HTTP_TIMEOUT = 15
 
 LOGIN_ERRORS = {
@@ -57,6 +63,24 @@ def normalize_phone(raw: str) -> str:
     return digits
 
 
+def apply_delta(previous: str, delta: str) -> str:
+    """Apply a websocket `D` answer to the previous answer (pytr's `_calculate_delta`)."""
+    i, result = 0, []
+    for diff in delta.split('\t'):
+        if not diff:
+            continue
+        sign, rest = diff[0], diff[1:]
+        if sign == '+':
+            result.append(urllib.parse.unquote_plus(rest).strip())
+        elif sign in ('-', '='):
+            if sign == '=':
+                result.append(previous[i:i + int(rest)])
+            i += int(rest)
+        else:
+            raise BankSyncError('Trade Republic sent an update this plugin cannot read')
+    return ''.join(result)
+
+
 def _jwt_exp(token: str | None) -> float | None:
     try:
         payload = token.split('.')[1]
@@ -68,7 +92,7 @@ def _jwt_exp(token: str | None) -> float | None:
 class TrSession:
     """A Trade Republic web session: login with app confirmation, renewal, account data."""
 
-    def __init__(self, phone: str, pin: str, cookies: dict | None, *, http=None, sleep=time.sleep, clock=time.monotonic):
+    def __init__(self, phone: str, pin: str, cookies: dict | None, *, http=None, sleep=time.sleep, clock=time.monotonic, connect=None):
         if http is None:
             import requests
             http = requests.Session()
@@ -78,6 +102,9 @@ class TrSession:
         self._sleep = sleep
         self._clock = clock
         self._cookies = {k: str(v) for k, v in (cookies or {}).items() if k in COOKIE_NAMES}
+        self._connect = connect
+        self._ws = None
+        self._next_id = 1
         self.device_id = hashlib.sha512(f'securo-trade-republic|{phone}'.encode()).hexdigest()
 
     @property
@@ -172,3 +199,71 @@ class TrSession:
         if not number:
             raise BankSyncError('Trade Republic returned no securities account')
         return str(number)
+
+    async def _socket(self):
+        if self._ws is not None:
+            return self._ws
+        connect = self._connect
+        if connect is None:
+            import websockets
+            connect = websockets.connect
+        cookie = '; '.join(f'{k}={v}' for k, v in self._cookies.items())
+        try:
+            self._ws = await connect(WS_URL, additional_headers={'Cookie': cookie}, user_agent_header=USER_AGENT,
+                                     open_timeout=HTTP_TIMEOUT)
+            await self._ws.send(f'connect 31 {json.dumps(WS_CONNECT)}')
+            answer = await asyncio.wait_for(self._ws.recv(), HTTP_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001 - any failure to connect is reported the same way
+            if isinstance(exc, BankSyncError):
+                raise
+            raise BankSyncError(f'could not connect to Trade Republic ({type(exc).__name__})') from None
+        if answer != 'connected':
+            raise BankSyncError('Trade Republic refused the connection')
+        return self._ws
+
+    async def read(self, kind: str, payload: dict | None = None, timeout: float = 20):
+        """Subscribe to `kind`, return its first answer, unsubscribe."""
+        if kind not in ALLOWED_SUBSCRIPTIONS:
+            raise ValueError(f'{kind} is not a read this plugin makes')
+        ws = await self._socket()
+        sub_id = str(self._next_id)
+        self._next_id += 1
+        await ws.send(f'sub {sub_id} {json.dumps({**(payload or {}), "type": kind})}')
+        previous = None
+        try:
+            while True:
+                try:
+                    message = await asyncio.wait_for(ws.recv(), timeout)
+                except asyncio.TimeoutError:
+                    raise BankSyncError(f'Trade Republic did not answer {kind} in time') from None
+                except Exception as exc:
+                    raise BankSyncError(f'the connection to Trade Republic closed while reading {kind} '
+                                        f'({type(exc).__name__})') from None
+                head, _, rest = str(message).partition(' ')
+                if head != sub_id:
+                    continue
+                code, _, body = rest.partition(' ')
+                if code == 'A':
+                    previous = body
+                elif code == 'D' and previous is not None:
+                    previous = apply_delta(previous, body)
+                elif code == 'E':
+                    raise BankSyncError(f'Trade Republic refused {kind}')
+                else:
+                    continue
+                try:
+                    return json.loads(previous) if previous else {}
+                except ValueError:
+                    raise BankSyncError(f'Trade Republic sent an unreadable {kind}') from None
+        finally:
+            try:
+                await ws.send(f'unsub {sub_id}')
+            except Exception:  # noqa: BLE001 - the answer is already in hand or the error is
+                pass
+
+    async def close(self) -> None:
+        if self._ws is not None:
+            try:
+                await self._ws.close()
+            finally:
+                self._ws = None

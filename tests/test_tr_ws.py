@@ -101,7 +101,7 @@ class Read(unittest.TestCase):
 
     def test_allowed_subscriptions_exact(self):
         self.assertEqual(c.ALLOWED_SUBSCRIPTIONS,
-                         frozenset({'cash', 'compactPortfolioByType', 'timelineTransactions', 'timelineDetailV2', 'instrument'}))
+                         frozenset({'cash', 'compactPortfolioByType', 'timelineTransactions', 'timelineDetailV2', 'instrument', 'ticker'}))
 
 
 if __name__ == '__main__':

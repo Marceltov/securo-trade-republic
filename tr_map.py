@@ -237,6 +237,23 @@ def trade_rows(events: list[dict], details: dict[str, dict], salt: str,
     return trades
 
 
+def check_trades_add_up(holdings: list[dict], trades: dict[str, list[dict]]) -> None:
+    """Each position's buys minus sells must give its units, as Securo checks them.
+
+    Securo drops a set that doesn't add up with only a log line; failing here
+    names the position instead, so an event this plugin does not map yet
+    (a transfer, a bonus share) is seen.
+    """
+    for holding in holdings:
+        rows = trades.get(holding['isin'], [])
+        target = Decimal(holding['quantity'])
+        position = sum((Decimal(t['quantity']) * (1 if t['kind'] == 'buy' else -1) for t in rows), Decimal(0))
+        largest = max([abs(target), *(Decimal(t['quantity']) for t in rows)])
+        if abs(position - target) > max(Decimal('0.0001'), largest * Decimal('0.000001')):
+            raise BankSyncError(f'the trades of {holding["isin"]} do not add up to its units in Trade Republic '
+                                '(an event type this plugin does not map yet?); nothing was imported')
+
+
 def holding_rows(portfolio: dict, prices: dict[str, Decimal], types: dict[str, str]) -> list[dict]:
     """One holding per position, valued at `prices[isin]`; `types[isin]` is the instrument's typeId."""
     categories = portfolio.get('categories') if isinstance(portfolio, dict) else None

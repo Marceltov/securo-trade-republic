@@ -9,15 +9,20 @@ from __future__ import annotations
 import datetime as dt
 import json
 import secrets as pysecrets
+import time
 from decimal import Decimal
 
 from tr_client import AuthError, BankSyncError, NeedsAuth, TrSession, normalize_phone
-from tr_map import TRADE_EVENTS, _day as _event_day_of, remembered, trade_id, account_row, holding_rows, paged_events, trade_rows, transaction_rows
+from tr_map import TRADE_EVENTS, _day as _event_day_of, check_trades_add_up, remembered, trade_id, account_row, holding_rows, paged_events, trade_rows, transaction_rows
 
 __all__ = ['AuthError', 'BankSyncError', 'NeedsAuth', 'Plugin', 'plugin']
 
 CONTRACT = 1
 LOGIN_WAIT_SECONDS = 50
+# Securo gives a call 60 seconds. Detail reads stop after this many seconds
+# from the start of the sync; what was read is remembered and the next sync
+# goes on from there.
+DETAIL_BUDGET_SECONDS = 40
 
 
 def _credentials(context) -> tuple[str, str]:
@@ -88,10 +93,12 @@ def _event_day(event: dict) -> dt.date:
 
 
 class Plugin:
-    def __init__(self, session_factory=None):
+    def __init__(self, session_factory=None, clock=time.monotonic):
         self._factory = session_factory or (lambda phone, pin, cookies: TrSession(phone, pin, cookies))
+        self._clock = clock
 
     async def sync(self, params: dict, context) -> dict:
+        started = self._clock()
         phone, pin = _credentials(context)
         salt = _salt(context)
         since = _since(params)
@@ -114,14 +121,24 @@ class Plugin:
             account['transactions'] = transaction_rows(
                 [e for e in events if since is None or _event_day(e) >= since])
             known = _known_trades(params)
-            details = {}
+            details, complete = {}, True
             for e in events:
                 if (e.get('eventType') in TRADE_EVENTS and e.get('status') == 'EXECUTED'
                         and e['id'] not in details and trade_id(salt, e['id']) not in known):
                     details[e['id']] = await session.read('timelineDetailV2', {'id': e['id']})
-            trades = trade_rows(events, details, salt, known)
-            for holding in holdings:
-                holding['trades'] = trades.get(holding['isin'], [])
+                    if self._clock() - started > DETAIL_BUDGET_SECONDS:
+                        complete = False
+                        break
+            if complete:
+                trades = trade_rows(events, details, salt, known)
+                check_trades_add_up(holdings, trades)
+                for holding in holdings:
+                    holding['trades'] = trades.get(holding['isin'], [])
+            else:
+                # Holdings go without trades this time (Securo keeps their
+                # ledger); the details read so far are remembered.
+                read = [e for e in events if e.get('id') in details or trade_id(salt, e.get('id')) in known]
+                trades = trade_rows(read, details, salt, known)
         except (NeedsAuth, AuthError, BankSyncError):
             raise
         except Exception as exc:  # noqa: BLE001 - never pass a foreign message on: it may carry secrets

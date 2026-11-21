@@ -22,8 +22,15 @@ READS = {
     'timelineTransactions': {'items': [{'id': 'e1', 'timestamp': '2026-11-19T10:00:00.000+0000', 'title': 'Example Shop',
                                         'amount': {'currency': 'EUR', 'value': -5}, 'status': 'EXECUTED',
                                         'eventType': 'CARD_TRANSACTION'}], 'cursors': {}},
-    'details': {},
+    'details': {'base': {'id': 'base', 'sections': [
+        {'title': 'Du hast 20,00 € investiert', 'type': 'header', 'action': {'type': 'instrumentDetail', 'payload': 'US0000000001'}},
+        {'title': 'Transaktion', 'type': 'table', 'data': [
+            {'title': 'Anteile', 'detail': {'type': 'text', 'text': '2'}},
+            {'title': 'Aktienkurs', 'detail': {'type': 'text', 'text': '10,00\xa0€'}}]}]}},
 }
+READS['timelineTransactions']['items'].append(
+    {'id': 'base', 'timestamp': '2020-01-02T09:00:00.000+0000', 'title': 'Example', 'amount': {'currency': 'EUR', 'value': -20.0},
+     'status': 'EXECUTED', 'eventType': 'ORDER_EXECUTED'})
 
 
 class FakeSession:
@@ -73,10 +80,11 @@ def context(secrets=None):
     return SimpleNamespace(secrets=base if secrets is None else secrets, config={}, securo={})
 
 
-def sync(params=None, ctx=None, **session_kw):
+def sync(params=None, ctx=None, clock=None, **session_kw):
     FakeSession.instances.clear()
     factory = lambda phone, pin, cookies: FakeSession(phone, pin, cookies, **session_kw)
-    return asyncio.run(b.Plugin(session_factory=factory).sync(params or {}, ctx or context()))
+    plugin = b.Plugin(session_factory=factory, **({'clock': clock} if clock else {}))
+    return asyncio.run(plugin.sync(params or {}, ctx or context()))
 
 
 class Sync(unittest.TestCase):
@@ -166,7 +174,8 @@ class with_timeline:
 
     def __enter__(self):
         self.saved = (READS['timelineTransactions'], READS['details'])
-        READS['timelineTransactions'] = {'items': self.saved[0]['items'] + self.events, 'cursors': {}}
+        items = [e for e in self.saved[0]['items'] if e.get('eventType') != 'ORDER_EXECUTED']
+        READS['timelineTransactions'] = {'items': items + self.events, 'cursors': {}}
         READS['details'] = self.details
 
     def __exit__(self, *exc):
@@ -198,8 +207,27 @@ class Trades(unittest.TestCase):
         detail_reads = [p['id'] for kind, p in FakeSession.instances[-1].reads if kind == 'timelineDetailV2']
         self.assertEqual(sorted(detail_reads), ['t1', 't2'])
 
-    def test_a_position_without_trades_reports_none(self):
-        self.assertEqual(sync()['data']['holdings'][0]['trades'], [])
+    def test_trades_that_do_not_add_up_fail_naming_the_position(self):
+        with with_timeline([trade_event('t1', 'ORDER_EXECUTED', -11.0)], {'t1': old_detail('1,5', '7,00', '1,00', isin=POS)}):
+            with self.assertRaises(c.BankSyncError) as caught:
+                sync()
+        self.assertIn(POS, str(caught.exception))
+
+    def test_a_position_without_any_trade_fails(self):
+        with with_timeline([], {}):
+            with self.assertRaises(c.BankSyncError):
+                sync()
+
+    def test_a_slow_first_sync_leaves_trades_out_and_keeps_what_it_read(self):
+        ticks = iter([0.0] + [100.0] * 50)
+        with self._two_buys():
+            first = sync(clock=lambda: next(ticks))
+            self.assertNotIn('trades', first['data']['holdings'][0])
+            self.assertEqual(len(first['state']['trades']), 1)
+            second = sync({'state': first['state']})
+        self.assertEqual(len(second['data']['holdings'][0]['trades']), 2)
+        detail_reads = [p for kind, p in FakeSession.instances[-1].reads if kind == 'timelineDetailV2']
+        self.assertEqual(len(detail_reads), 1)
 
     def test_a_later_sync_reads_only_new_trade_details(self):
         with self._two_buys():

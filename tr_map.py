@@ -129,6 +129,94 @@ async def paged_events(read_page, since: dt.date | None) -> list[dict]:
     raise BankSyncError('the Trade Republic timeline did not end; nothing was imported')
 
 
+# Timeline events that move units: each becomes a buy or sell on its position.
+TRADE_EVENTS = frozenset({
+    'ORDER_EXECUTED', 'TRADING_SAVINGSPLAN_EXECUTED', 'TRADING_TRADE_EXECUTED', 'TRADE_INVOICE',
+    'SAVINGS_PLAN_EXECUTED', 'SAVINGS_PLAN_INVOICE_CREATED', 'TRADE_CORRECTED',
+    'BENEFITS_SAVEBACK_EXECUTION', 'BENEFITS_SPARE_CHANGE_EXECUTION', 'SAVEBACK_AGGREGATE', 'SPARE_CHANGE_AGGREGATE',
+})
+# Events that move units in a way not mapped yet: refusing them keeps the
+# history from silently not adding up.
+UNIT_EVENTS_REFUSED = frozenset({
+    'SSP_SECURITIES_TRANSFER_INCOMING', 'ACQUISITION_TRADE_PERK', 'IPO_SUBSCRIPTION_ALLOCATION',
+    'IPO_TRADE_EXECUTED', 'SSP_CORPORATE_ACTION_INVOICE_SHARES',
+})
+MICRO = Decimal('0.000001')
+FREE = {'kostenlos', 'gratis', 'free'}
+
+
+def _detail_number(text, what: str) -> Decimal:
+    """A number as the detail pages show it: "1.234,56 €", "0,001234"."""
+    cleaned = str(text or '').replace('\xa0', ' ').replace('€', '').strip()
+    if cleaned.lower() in FREE:
+        return Decimal(0)
+    return _decimal(cleaned.replace('.', '').replace(',', '.'), what)
+
+
+def _rows(detail: dict) -> dict[str, str]:
+    """Every titled text row of the detail, the Transaktion info page included."""
+    found: dict[str, str] = {}
+
+    def walk(sections):
+        for section in sections if isinstance(sections, list) else []:
+            data = section.get('data') if isinstance(section, dict) else None
+            for r in data if isinstance(data, list) else []:
+                info = (r.get('detail') or {}).get('action') if isinstance(r, dict) else None
+                if isinstance(info, dict) and isinstance(info.get('payload'), dict):
+                    walk(info['payload'].get('sections'))
+                text = (r.get('detail') or {}).get('text') if isinstance(r, dict) else None
+                if isinstance(text, str):
+                    found.setdefault(str(r.get('title') or ''), text)
+    walk(detail.get('sections') if isinstance(detail, dict) else None)
+    return found
+
+
+def _isin(detail: dict) -> str:
+    for section in detail.get('sections') or [] if isinstance(detail, dict) else []:
+        action = section.get('action') if isinstance(section, dict) else None
+        if section.get('type') == 'header' and isinstance(action, dict) and action.get('type') == 'instrumentDetail':
+            return str(action.get('payload') or '')
+    return ''
+
+
+def trade_rows(events: list[dict], details: dict[str, dict], salt: str) -> dict[str, list[dict]]:
+    """The buys and sells in `events`, by ISIN; `details[id]` is each trade event's timelineDetailV2."""
+    trades: dict[str, list[dict]] = {}
+    seen = set()
+    for e in events:
+        kind_of_event = e.get('eventType') if isinstance(e, dict) else None
+        if kind_of_event in UNIT_EVENTS_REFUSED:
+            raise BankSyncError(f'Trade Republic sent a {_text(kind_of_event, 60)} event, which this plugin cannot map yet; '
+                                'nothing was imported')
+        if kind_of_event not in TRADE_EVENTS or e.get('status') != 'EXECUTED' or e.get('deleted') or e['id'] in seen:
+            continue
+        seen.add(e['id'])
+        detail = details.get(e['id'])
+        if not isinstance(detail, dict):
+            raise BankSyncError('Trade Republic sent no detail for a trade; nothing was imported')
+        isin = _isin(detail)
+        if not isin:
+            raise BankSyncError('Trade Republic sent a trade without its security; nothing was imported')
+        rows = _rows(detail)
+        units = rows.get('Aktien') or rows.get('Anteile') or rows.get('Shares')
+        price = rows.get('Aktienkurs') or rows.get('Kurs') or rows.get('Price')
+        if units is None or price is None:
+            raise BankSyncError(f'Trade Republic sent a {_text(kind_of_event, 60)} without units or price; nothing was imported')
+        quantity = _detail_number(units, 'number of units').quantize(MICRO, rounding=ROUND_HALF_UP)
+        amount = _decimal((e.get('amount') or {}).get('value'), 'amount')
+        if quantity <= 0 or amount == 0:
+            raise BankSyncError(f'Trade Republic sent a {_text(kind_of_event, 60)} without units or amount; nothing was imported')
+        trades.setdefault(isin, []).append({
+            'external_id': _digest(salt, 'tr-trade-', e['id']),
+            'kind': 'buy' if amount < 0 else 'sell',
+            'date': _day(e.get('timestamp')).isoformat(),
+            'quantity': format(quantity.normalize(), 'f'),
+            'price': format(_detail_number(price, 'price').quantize(MICRO, rounding=ROUND_HALF_UP).normalize(), 'f'),
+            'fee': _money(abs(_detail_number(rows.get('Gebühr', '0'), 'fee'))),
+        })
+    return trades
+
+
 def holding_rows(portfolio: dict, prices: dict[str, Decimal], types: dict[str, str]) -> list[dict]:
     """One holding per position, valued at `prices[isin]`; `types[isin]` is the instrument's typeId."""
     categories = portfolio.get('categories') if isinstance(portfolio, dict) else None

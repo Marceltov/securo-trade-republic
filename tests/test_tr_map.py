@@ -139,3 +139,109 @@ class Holdings(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+ISIN = 'XX0000000001'
+NB = '\xa0'
+
+
+def trade_event(id_, event_type='TRADING_SAVINGSPLAN_EXECUTED', value=-50.0, status='EXECUTED',
+                ts='2020-01-02T09:00:00.000+0000'):
+    return {'id': id_, 'timestamp': ts, 'title': 'Example ETF', 'subtitle': 'Sparplan ausgeführt',
+            'amount': {'currency': 'EUR', 'value': value, 'fractionDigits': 2},
+            'status': status, 'eventType': event_type, 'hidden': False, 'deleted': False}
+
+
+def header(isin=ISIN):
+    return {'title': 'Du hast 50,00 € gespart', 'type': 'header',
+            'action': {'type': 'instrumentDetail', 'payload': isin}, 'data': {'status': 'executed'}}
+
+
+def row(title, text):
+    return {'title': title, 'style': 'plain', 'detail': {'type': 'text', 'text': text}}
+
+
+def new_detail(units, price, fee='Kostenlos', isin=ISIN):
+    """The layout of TRADING_* events: units and price on the info page behind the Transaktion row."""
+    info = {'sections': [{'title': 'Transaktion', 'type': 'header', 'data': {'status': 'executed'}},
+                         {'type': 'table', 'data': [row('Aktienkurs', f'{price}{NB}€'), row('Aktien', units),
+                                                    row('Summe', f'50,00{NB}€')]}]}
+    transaktion = {'title': 'Transaktion', 'style': 'plain',
+                   'detail': {'type': 'text', 'text': f'{units} ×  {price}{NB}€',
+                              'action': {'type': 'infoPage', 'payload': info}}}
+    return {'id': 'd', 'sections': [header(isin), {'title': 'Übersicht', 'type': 'table', 'data': [
+        row('Sparplan', 'Ausgeführt'), transaktion, row('Gebühr', fee), row('Summe', f'50,00{NB}€')]}]}
+
+
+def old_detail(units, price, fee, isin=ISIN):
+    """The layout of ORDER_EXECUTED: its own Transaktion table."""
+    return {'id': 'd', 'sections': [header(isin),
+                                    {'title': 'Übersicht', 'type': 'table', 'data': [row('Status', 'Ausgeführt'), row('Orderart', 'Kauf')]},
+                                    {'title': 'Transaktion', 'type': 'table', 'data': [
+                                        row('Anteile', units), row('Aktienkurs', f'{price}{NB}€'),
+                                        row('Gebühr', f'{fee}{NB}€'), row('Gesamt', f'101,00{NB}€')]}]}
+
+
+class Trades(unittest.TestCase):
+    def test_order_becomes_a_buy_on_its_execution_day(self):
+        trades = m.trade_rows([trade_event('o', 'ORDER_EXECUTED', -101.0)], {'o': old_detail('2', '50,00', '1,00')}, SALT)
+        self.assertEqual(list(trades), [ISIN])
+        t = trades[ISIN][0]
+        self.assertEqual({k: t[k] for k in ('kind', 'date', 'quantity', 'price', 'fee')},
+                         {'kind': 'buy', 'date': '2020-01-02', 'quantity': '2', 'price': '50', 'fee': '1.00'})
+
+    def test_savings_plan_run_is_a_buy_without_fee(self):
+        t = m.trade_rows([trade_event('s')], {'s': new_detail('0,5', '100,00')}, SALT)[ISIN][0]
+        self.assertEqual((t['kind'], t['quantity'], t['price'], t['fee']), ('buy', '0.5', '100', '0.00'))
+
+    def test_sell_is_a_sell_with_positive_units(self):
+        t = m.trade_rows([trade_event('x', 'TRADING_TRADE_EXECUTED', 300.0)], {'x': new_detail('3', '100,00', f'1,00{NB}€')}, SALT)[ISIN][0]
+        self.assertEqual((t['kind'], t['quantity'], t['fee']), ('sell', '3', '1.00'))
+
+    def test_cancelled_order_is_not_a_trade(self):
+        self.assertEqual(m.trade_rows([trade_event('c', 'ORDER_EXECUTED', status='CANCELED')], {}, SALT), {})
+
+    def test_failed_savings_plan_run_is_not_a_trade(self):
+        self.assertEqual(m.trade_rows([trade_event('f', 'TRADING_SAVINGSPLAN_EXECUTION_FAILED')], {}, SALT), {})
+
+    def test_crypto_units_keep_six_decimals(self):
+        t = m.trade_rows([trade_event('b')], {'b': new_detail('0,0012345678', '1.234,56')}, SALT)[ISIN][0]
+        self.assertEqual((t['quantity'], t['price']), ('0.001235', '1234.56'))
+
+    def test_unknown_unit_event_fails_naming_it(self):
+        with self.assertRaises(c.BankSyncError) as caught:
+            m.trade_rows([trade_event('t', 'SSP_SECURITIES_TRANSFER_INCOMING', 0.0)], {}, SALT)
+        self.assertIn('SSP_SECURITIES_TRANSFER_INCOMING', str(caught.exception))
+
+    def test_trade_detail_without_units_fails(self):
+        detail = old_detail('2', '50,00', '1,00')
+        detail['sections'][2]['data'] = [r for r in detail['sections'][2]['data'] if r['title'] != 'Anteile']
+        with self.assertRaises(c.BankSyncError):
+            m.trade_rows([trade_event('o', 'ORDER_EXECUTED')], {'o': detail}, SALT)
+
+    def test_trade_detail_without_isin_fails(self):
+        detail = new_detail('1', '10,00')
+        detail['sections'][0]['action'] = None
+        with self.assertRaises(c.BankSyncError):
+            m.trade_rows([trade_event('s')], {'s': detail}, SALT)
+
+    def test_external_id_is_stable_and_salted(self):
+        def ids(salt):
+            return m.trade_rows([trade_event('s')], {'s': new_detail('1', '10,00')}, salt)[ISIN][0]['external_id']
+        self.assertEqual(ids(SALT), ids(SALT))
+        self.assertNotEqual(ids(SALT), ids('11' * 32))
+        self.assertNotIn('s', ids(SALT).removeprefix('tr-trade-'))
+
+    def test_execution_day_is_berlin_local(self):
+        t = m.trade_rows([trade_event('s', ts='2020-01-01T23:30:00.000+0000')], {'s': new_detail('1', '10,00')}, SALT)[ISIN][0]
+        self.assertEqual(t['date'], '2020-01-02')
+
+    def test_trades_of_two_positions_are_kept_apart(self):
+        trades = m.trade_rows([trade_event('a'), trade_event('b')],
+                              {'a': new_detail('1', '10,00'), 'b': new_detail('2', '20,00', isin='XX0000000002')}, SALT)
+        self.assertEqual(sorted(trades), [ISIN, 'XX0000000002'])
+
+    def test_a_detail_without_a_fee_row_has_no_fee(self):
+        detail = new_detail('1', '10,00')
+        detail['sections'][1]['data'] = [r for r in detail['sections'][1]['data'] if r['title'] != 'Gebühr']
+        self.assertEqual(m.trade_rows([trade_event('s')], {'s': detail}, SALT)[ISIN][0]['fee'], '0.00')

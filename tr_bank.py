@@ -12,7 +12,7 @@ import secrets as pysecrets
 from decimal import Decimal
 
 from tr_client import AuthError, BankSyncError, NeedsAuth, TrSession, normalize_phone
-from tr_map import account_row, holding_rows, paged_events, transaction_rows
+from tr_map import TRADE_EVENTS, _day as _event_day_of, remembered, trade_id, account_row, holding_rows, paged_events, trade_rows, transaction_rows
 
 __all__ = ['AuthError', 'BankSyncError', 'NeedsAuth', 'Plugin', 'plugin']
 
@@ -76,6 +76,17 @@ async def _prices(session, portfolio: dict) -> tuple[dict[str, Decimal], dict[st
     return prices, types
 
 
+def _known_trades(params) -> dict:
+    """Trades read on an earlier sync (see tr_map.remembered); anything unexpected is ignored and read again."""
+    state = (params or {}).get('state')
+    known = state.get('trades') if isinstance(state, dict) else None
+    return known if isinstance(known, dict) else {}
+
+
+def _event_day(event: dict) -> dt.date:
+    return _event_day_of(event.get('timestamp'))
+
+
 class Plugin:
     def __init__(self, session_factory=None):
         self._factory = session_factory or (lambda phone, pin, cookies: TrSession(phone, pin, cookies))
@@ -96,7 +107,21 @@ class Plugin:
 
             async def page(after):
                 return await session.read('timelineTransactions', {'after': after} if after else None)
-            account['transactions'] = transaction_rows(await paged_events(page, since))
+            # The whole timeline every time: Securo replaces a position's
+            # plugin trades with the set reported, so a partial set would drop
+            # history. Cash bookings still follow Securo's window.
+            events = await paged_events(page, None)
+            account['transactions'] = transaction_rows(
+                [e for e in events if since is None or _event_day(e) >= since])
+            known = _known_trades(params)
+            details = {}
+            for e in events:
+                if (e.get('eventType') in TRADE_EVENTS and e.get('status') == 'EXECUTED'
+                        and e['id'] not in details and trade_id(salt, e['id']) not in known):
+                    details[e['id']] = await session.read('timelineDetailV2', {'id': e['id']})
+            trades = trade_rows(events, details, salt, known)
+            for holding in holdings:
+                holding['trades'] = trades.get(holding['isin'], [])
         except (NeedsAuth, AuthError, BankSyncError):
             raise
         except Exception as exc:  # noqa: BLE001 - never pass a foreign message on: it may carry secrets
@@ -108,7 +133,7 @@ class Plugin:
                 pass
         return {
             'secrets': {'id_salt': salt, 'session': json.dumps(session.cookies)},
-            'state': {},
+            'state': {'trades': remembered(trades)},
             'data': {'contract': CONTRACT, 'accounts': [account], 'holdings': holdings},
         }
 

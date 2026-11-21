@@ -245,3 +245,8 @@ class Trades(unittest.TestCase):
         detail = new_detail('1', '10,00')
         detail['sections'][1]['data'] = [r for r in detail['sections'][1]['data'] if r['title'] != 'Gebühr']
         self.assertEqual(m.trade_rows([trade_event('s')], {'s': detail}, SALT)[ISIN][0]['fee'], '0.00')
+
+    def test_known_trades_need_no_detail(self):
+        known = m.trade_rows([trade_event('s')], {'s': new_detail('1', '10,00')}, SALT)
+        again = m.trade_rows([trade_event('s')], {}, SALT, known=m.remembered(known))
+        self.assertEqual(again, known)

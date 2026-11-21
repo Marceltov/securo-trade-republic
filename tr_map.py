@@ -179,9 +179,24 @@ def _isin(detail: dict) -> str:
     return ''
 
 
-def trade_rows(events: list[dict], details: dict[str, dict], salt: str) -> dict[str, list[dict]]:
-    """The buys and sells in `events`, by ISIN; `details[id]` is each trade event's timelineDetailV2."""
+def trade_id(salt: str, event_id) -> str:
+    return _digest(salt, 'tr-trade-', event_id)
+
+
+def remembered(trades: dict[str, list[dict]]) -> dict[str, dict]:
+    """`trades` keyed by their external id, each with its ISIN: kept in the connection's state."""
+    return {t['external_id']: {**t, 'isin': isin} for isin, rows in trades.items() for t in rows}
+
+
+def trade_rows(events: list[dict], details: dict[str, dict], salt: str,
+               known: dict[str, dict] | None = None) -> dict[str, list[dict]]:
+    """The buys and sells in `events`, by ISIN; `details[id]` is each trade event's timelineDetailV2.
+
+    A trade in `known` (see `remembered`) needs no detail: an executed trade
+    does not change, and a correction arrives as an event of its own.
+    """
     trades: dict[str, list[dict]] = {}
+    known = known or {}
     seen = set()
     for e in events:
         kind_of_event = e.get('eventType') if isinstance(e, dict) else None
@@ -191,6 +206,11 @@ def trade_rows(events: list[dict], details: dict[str, dict], salt: str) -> dict[
         if kind_of_event not in TRADE_EVENTS or e.get('status') != 'EXECUTED' or e.get('deleted') or e['id'] in seen:
             continue
         seen.add(e['id'])
+        remembered_trade = known.get(trade_id(salt, e['id']))
+        if isinstance(remembered_trade, dict) and remembered_trade.get('isin'):
+            trades.setdefault(remembered_trade['isin'], []).append(
+                {k: v for k, v in remembered_trade.items() if k != 'isin'})
+            continue
         detail = details.get(e['id'])
         if not isinstance(detail, dict):
             raise BankSyncError('Trade Republic sent no detail for a trade; nothing was imported')
@@ -207,7 +227,7 @@ def trade_rows(events: list[dict], details: dict[str, dict], salt: str) -> dict[
         if quantity <= 0 or amount == 0:
             raise BankSyncError(f'Trade Republic sent a {_text(kind_of_event, 60)} without units or amount; nothing was imported')
         trades.setdefault(isin, []).append({
-            'external_id': _digest(salt, 'tr-trade-', e['id']),
+            'external_id': trade_id(salt, e['id']),
             'kind': 'buy' if amount < 0 else 'sell',
             'date': _day(e.get('timestamp')).isoformat(),
             'quantity': format(quantity.normalize(), 'f'),

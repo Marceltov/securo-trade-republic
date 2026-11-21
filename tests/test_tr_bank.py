@@ -22,6 +22,7 @@ READS = {
     'timelineTransactions': {'items': [{'id': 'e1', 'timestamp': '2026-11-19T10:00:00.000+0000', 'title': 'Example Shop',
                                         'amount': {'currency': 'EUR', 'value': -5}, 'status': 'EXECUTED',
                                         'eventType': 'CARD_TRANSACTION'}], 'cursors': {}},
+    'details': {},
 }
 
 
@@ -59,6 +60,8 @@ class FakeSession:
         self.reads.append((kind, payload))
         if self.read_error:
             raise self.read_error
+        if kind == 'timelineDetailV2':
+            return READS['details'][payload['id']]
         return READS[kind]
 
     async def close(self):
@@ -148,3 +151,66 @@ class Sync(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+from tests.test_tr_map import old_detail, trade_event  # noqa: E402
+
+POS = 'US0000000001'
+
+
+class with_timeline:
+    """READS with extra timeline events and their details, restored afterwards."""
+
+    def __init__(self, events, details):
+        self.events, self.details = events, details
+
+    def __enter__(self):
+        self.saved = (READS['timelineTransactions'], READS['details'])
+        READS['timelineTransactions'] = {'items': self.saved[0]['items'] + self.events, 'cursors': {}}
+        READS['details'] = self.details
+
+    def __exit__(self, *exc):
+        READS['timelineTransactions'], READS['details'] = self.saved
+
+
+class Trades(unittest.TestCase):
+    def _two_buys(self):
+        return with_timeline(
+            [trade_event('t1', 'ORDER_EXECUTED', -11.0, ts='2026-10-01T09:00:00.000+0000'),
+             trade_event('t2', 'TRADING_SAVINGSPLAN_EXECUTED', -10.0, ts='2020-05-04T09:00:00.000+0000')],
+            {'t1': old_detail('1,5', '7,00', '1,00', isin=POS), 't2': old_detail('0,5', '20,00', 'Kostenlos', isin=POS)})
+
+    def test_sync_attaches_trades_to_their_holding(self):
+        with self._two_buys():
+            holding = sync()['data']['holdings'][0]
+        self.assertEqual(sorted((t['date'], t['kind'], t['quantity']) for t in holding['trades']),
+                         [('2020-05-04', 'buy', '0.5'), ('2026-10-01', 'buy', '1.5')])
+
+    def test_sync_reads_the_whole_timeline_for_trades(self):
+        with self._two_buys():
+            result = sync({'since': '2026-09-01'})
+        self.assertIn('2020-05-04', [t['date'] for t in result['data']['holdings'][0]['trades']])
+        self.assertNotIn('2020-05-04', [t['date'] for t in result['data']['accounts'][0]['transactions']])
+
+    def test_sync_reads_details_only_for_trade_events(self):
+        with self._two_buys():
+            sync()
+        detail_reads = [p['id'] for kind, p in FakeSession.instances[-1].reads if kind == 'timelineDetailV2']
+        self.assertEqual(sorted(detail_reads), ['t1', 't2'])
+
+    def test_a_position_without_trades_reports_none(self):
+        self.assertEqual(sync()['data']['holdings'][0]['trades'], [])
+
+    def test_a_later_sync_reads_only_new_trade_details(self):
+        with self._two_buys():
+            first = sync()
+            second = sync({'state': first['state']})
+        detail_reads = [p for kind, p in FakeSession.instances[-1].reads if kind == 'timelineDetailV2']
+        self.assertEqual(detail_reads, [])
+        self.assertEqual(sorted(t['external_id'] for t in second['data']['holdings'][0]['trades']),
+                         sorted(t['external_id'] for t in first['data']['holdings'][0]['trades']))
+
+    def test_remembered_trades_hold_no_event_ids(self):
+        with self._two_buys():
+            state = sync()['state']
+        self.assertNotIn('t1', json.dumps(state))

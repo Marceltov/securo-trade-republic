@@ -56,7 +56,7 @@
           "accounts",
           "transactions",
           "holdings",
-                    "trades"
+          "trades"
         ]
       }
     ]

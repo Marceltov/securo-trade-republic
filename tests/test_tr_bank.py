@@ -242,3 +242,23 @@ class Trades(unittest.TestCase):
         with self._two_buys():
             state = sync()['state']
         self.assertNotIn('t1', json.dumps(state))
+
+    def test_a_sold_out_position_comes_in_closed(self):
+        gone = 'XX0000000009'
+        with with_timeline(
+            [trade_event('t0', 'ORDER_EXECUTED', -20.0), trade_event('g1', 'ORDER_EXECUTED', -30.0),
+             trade_event('g2', 'TRADING_TRADE_EXECUTED', 40.0)],
+            {'t0': old_detail('2', '10,00', '0', isin=POS), 'g1': old_detail('3', '10,00', '0', isin=gone),
+             'g2': old_detail('3', '13,00', '0', isin=gone)}):
+            holdings = sync()['data']['holdings']
+        closed = [h for h in holdings if h['isin'] == gone]
+        self.assertEqual(len(closed), 1)
+        self.assertTrue(closed[0]['is_withdrawn'])
+        self.assertEqual(sorted(t['kind'] for t in closed[0]['trades']), ['buy', 'sell'])
+
+    def test_deleted_trade_events_are_not_read(self):
+        e = trade_event('del', 'ORDER_EXECUTED')
+        e['deleted'] = True
+        with with_timeline([trade_event('t0', 'ORDER_EXECUTED', -20.0), e], {'t0': old_detail('2', '10,00', '0', isin=POS)}):
+            sync()
+        self.assertNotIn({'id': 'del'}, [p for kind, p in FakeSession.instances[-1].reads if kind == 'timelineDetailV2'])

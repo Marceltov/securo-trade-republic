@@ -13,7 +13,7 @@ import time
 from decimal import Decimal
 
 from tr_client import AuthError, BankSyncError, NeedsAuth, TrSession, normalize_phone
-from tr_map import TRADE_EVENTS, _day as _event_day_of, check_trades_add_up, remembered, trade_id, account_row, holding_rows, paged_events, trade_rows, transaction_rows
+from tr_map import TRADE_EVENTS, _day as _event_day_of, check_trades_add_up, closed_holding_rows, remembered, trade_id, valid_known, account_row, holding_rows, paged_events, trade_rows, transaction_rows
 
 __all__ = ['AuthError', 'BankSyncError', 'NeedsAuth', 'Plugin', 'plugin']
 
@@ -85,7 +85,7 @@ def _known_trades(params) -> dict:
     """Trades read on an earlier sync (see tr_map.remembered); anything unexpected is ignored and read again."""
     state = (params or {}).get('state')
     known = state.get('trades') if isinstance(state, dict) else None
-    return known if isinstance(known, dict) else {}
+    return valid_known(known) if isinstance(known, dict) else {}
 
 
 def _event_day(event: dict) -> dt.date:
@@ -124,6 +124,7 @@ class Plugin:
             details, complete = {}, True
             for e in events:
                 if (e.get('eventType') in TRADE_EVENTS and e.get('status') == 'EXECUTED'
+                        and not e.get('deleted') and not e.get('hidden')
                         and e['id'] not in details and trade_id(salt, e['id']) not in known):
                     details[e['id']] = await session.read('timelineDetailV2', {'id': e['id']})
                     if self._clock() - started > DETAIL_BUDGET_SECONDS:
@@ -131,9 +132,11 @@ class Plugin:
                         break
             if complete:
                 trades = trade_rows(events, details, salt, known)
-                check_trades_add_up(holdings, trades)
                 for holding in holdings:
                     holding['trades'] = trades.get(holding['isin'], [])
+                # Positions sold out come in closed, with their trades.
+                holdings += closed_holding_rows(trades, events, salt, {h['isin'] for h in holdings})
+                check_trades_add_up(holdings, trades)
             else:
                 # Holdings go without trades this time (Securo keeps their
                 # ledger); the details read so far are remembered.

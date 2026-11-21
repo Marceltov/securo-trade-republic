@@ -250,3 +250,44 @@ class Trades(unittest.TestCase):
         known = m.trade_rows([trade_event('s')], {'s': new_detail('1', '10,00')}, SALT)
         again = m.trade_rows([trade_event('s')], {}, SALT, known=m.remembered(known))
         self.assertEqual(again, known)
+
+    def test_saveback_is_a_buy_whatever_its_sign(self):
+        t = m.trade_rows([trade_event('sb', 'BENEFITS_SAVEBACK_EXECUTION', 15.0)], {'sb': new_detail('0,1', '150,00')}, SALT)[ISIN][0]
+        self.assertEqual(t['kind'], 'buy')
+
+    def test_hidden_trade_event_is_not_a_trade(self):
+        e = trade_event('h')
+        e['hidden'] = True
+        self.assertEqual(m.trade_rows([e], {}, SALT), {})
+
+    def test_units_are_rounded_so_the_total_stays_exact(self):
+        events = [trade_event(f'r{i}', ts=f'2020-01-0{i + 1}T09:00:00.000+0000') for i in range(3)]
+        details = {f'r{i}': new_detail('0,3333333', '10,00') for i in range(3)}
+        rows = m.trade_rows(events, details, SALT)[ISIN]
+        self.assertEqual(sum(Decimal(t['quantity']) for t in rows), Decimal('1.000000'))
+        self.assertTrue(all(Decimal(t['quantity']) > 0 for t in rows))
+
+    def test_broken_remembered_trades_are_dropped(self):
+        good = m.remembered(m.trade_rows([trade_event('s')], {'s': new_detail('1', '10,00')}, SALT))
+        (key, entry), = good.items()
+        known = {key: entry, 'x1': {**entry, 'kind': 'gift'}, 'x2': {**entry, 'quantity': 'many'}, 'x3': 'nonsense',
+                 'x4': {**entry, 'isin': ''}, 'x5': {**entry, 'date': 'yesterday'}}
+        self.assertEqual(m.valid_known(known), {key: entry})
+
+
+class ClosedPositions(unittest.TestCase):
+    def test_a_position_no_longer_held_comes_in_closed_with_its_trades(self):
+        trades = m.trade_rows([trade_event('b', value=-20.0), trade_event('s', 'TRADING_TRADE_EXECUTED', 25.0)],
+                              {'b': new_detail('2', '10,00'), 's': new_detail('2', '12,50')}, SALT)
+        events = [trade_event('b')]
+        rows = m.closed_holding_rows(trades, events, SALT, held=set())
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertEqual({k: r[k] for k in ('external_id', 'name', 'quantity', 'current_value', 'is_withdrawn', 'isin')},
+                         {'external_id': f'tr-pos-{ISIN}', 'name': 'Example ETF', 'quantity': '0', 'current_value': '0.00',
+                          'is_withdrawn': True, 'isin': ISIN})
+        self.assertEqual(len(r['trades']), 2)
+
+    def test_a_held_position_is_not_reported_closed(self):
+        trades = m.trade_rows([trade_event('b')], {'b': new_detail('2', '10,00')}, SALT)
+        self.assertEqual(m.closed_holding_rows(trades, [trade_event('b')], SALT, held={ISIN}), [])

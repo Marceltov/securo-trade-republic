@@ -141,6 +141,9 @@ UNIT_EVENTS_REFUSED = frozenset({
     'SSP_SECURITIES_TRANSFER_INCOMING', 'ACQUISITION_TRADE_PERK', 'IPO_SUBSCRIPTION_ALLOCATION',
     'IPO_TRADE_EXECUTED', 'SSP_CORPORATE_ACTION_INVOICE_SHARES',
 })
+# Bought for you (Saveback, round-ups): a buy whatever the sign of its amount.
+BUY_ONLY_EVENTS = frozenset({'BENEFITS_SAVEBACK_EXECUTION', 'SAVEBACK_AGGREGATE',
+                             'BENEFITS_SPARE_CHANGE_EXECUTION', 'SPARE_CHANGE_AGGREGATE'})
 MICRO = Decimal('0.000001')
 FREE = {'kostenlos', 'gratis', 'free'}
 
@@ -203,7 +206,8 @@ def trade_rows(events: list[dict], details: dict[str, dict], salt: str,
         if kind_of_event in UNIT_EVENTS_REFUSED:
             raise BankSyncError(f'Trade Republic sent a {_text(kind_of_event, 60)} event, which this plugin cannot map yet; '
                                 'nothing was imported')
-        if kind_of_event not in TRADE_EVENTS or e.get('status') != 'EXECUTED' or e.get('deleted') or e['id'] in seen:
+        if (kind_of_event not in TRADE_EVENTS or e.get('status') != 'EXECUTED' or e.get('deleted') or e.get('hidden')
+                or e['id'] in seen):
             continue
         seen.add(e['id'])
         remembered_trade = known.get(trade_id(salt, e['id']))
@@ -222,19 +226,75 @@ def trade_rows(events: list[dict], details: dict[str, dict], salt: str,
         price = rows.get('Aktienkurs') or rows.get('Kurs') or rows.get('Price')
         if units is None or price is None:
             raise BankSyncError(f'Trade Republic sent a {_text(kind_of_event, 60)} without units or price; nothing was imported')
-        quantity = _detail_number(units, 'number of units').quantize(MICRO, rounding=ROUND_HALF_UP)
+        quantity = _detail_number(units, 'number of units')
         amount = _decimal((e.get('amount') or {}).get('value'), 'amount')
-        if quantity <= 0 or amount == 0:
+        buy_only = kind_of_event in BUY_ONLY_EVENTS
+        if quantity <= 0 or (amount == 0 and not buy_only):
             raise BankSyncError(f'Trade Republic sent a {_text(kind_of_event, 60)} without units or amount; nothing was imported')
         trades.setdefault(isin, []).append({
             'external_id': trade_id(salt, e['id']),
-            'kind': 'buy' if amount < 0 else 'sell',
+            'kind': 'buy' if buy_only or amount < 0 else 'sell',
             'date': _day(e.get('timestamp')).isoformat(),
-            'quantity': format(quantity.normalize(), 'f'),
+            'quantity': quantity,
             'price': format(_detail_number(price, 'price').quantize(MICRO, rounding=ROUND_HALF_UP).normalize(), 'f'),
             'fee': _money(abs(_detail_number(rows.get('Gebühr', '0'), 'fee'))),
         })
+    for rows in trades.values():
+        _round_units(rows)
     return trades
+
+
+def _round_units(rows: list[dict]) -> None:
+    """Units to Securo's six decimals, so that the position after each trade is the exact one rounded.
+
+    Rounding each trade alone lets the errors add up past Securo's tolerance
+    over many small trades; rounding the running position keeps the sum
+    within half a millionth of the exact one. Rows read from a remembered
+    sync already carry a string and stay as they are.
+    """
+    exact = previous = Decimal(0)
+    for t in sorted(rows, key=lambda t: (t['date'], t['kind'] != 'buy', t['external_id'])):
+        if isinstance(t['quantity'], str):
+            step = Decimal(t['quantity'])
+        else:
+            step = t['quantity']
+        exact += step if t['kind'] == 'buy' else -step
+        position = exact.quantize(MICRO, rounding=ROUND_HALF_UP)
+        quantity = abs(position - previous) or MICRO
+        previous = position if abs(position - previous) else previous + (quantity if t['kind'] == 'buy' else -quantity)
+        t['quantity'] = format(quantity.normalize(), 'f')
+
+
+TRADE_KEYS = {'external_id', 'kind', 'date', 'quantity', 'price', 'fee', 'isin'}
+
+
+def valid_known(known: dict) -> dict[str, dict]:
+    """The remembered trades that are well formed; any other is dropped and read again."""
+    valid = {}
+    for key, t in (known or {}).items():
+        try:
+            ok = (isinstance(t, dict) and set(t) == TRADE_KEYS and t['external_id'] == key
+                  and t['kind'] in ('buy', 'sell') and isinstance(t['isin'], str) and len(t['isin']) == 12
+                  and Decimal(t['quantity']) > 0 and Decimal(t['price']) >= 0 and Decimal(t['fee']) >= 0
+                  and dt.date.fromisoformat(t['date']) is not None)
+        except (InvalidOperation, TypeError, ValueError, KeyError):
+            ok = False
+        if ok:
+            valid[key] = t
+    return valid
+
+
+def closed_holding_rows(trades: dict[str, list[dict]], events: list[dict], salt: str, held: set[str]) -> list[dict]:
+    """A position no longer in the depot, reported closed with its trades so Securo keeps its history."""
+    names = {trade_id(salt, e.get('id')): _text(e.get('title'), 255) for e in events if isinstance(e, dict)}
+    rows = []
+    for isin, isin_trades in sorted(trades.items()):
+        if isin in held:
+            continue
+        name = next((names[t['external_id']] for t in isin_trades if names.get(t['external_id'])), isin)
+        rows.append({'external_id': f'tr-pos-{isin}', 'name': name, 'currency': 'EUR', 'quantity': '0',
+                     'current_value': '0.00', 'is_withdrawn': True, 'isin': isin, 'trades': isin_trades})
+    return rows
 
 
 def check_trades_add_up(holdings: list[dict], trades: dict[str, list[dict]]) -> None:

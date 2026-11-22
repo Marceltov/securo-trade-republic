@@ -161,6 +161,11 @@ def row(title, text):
     return {'title': title, 'style': 'plain', 'detail': {'type': 'text', 'text': text}}
 
 
+DOCUMENTS = {'title': 'Dokumente', 'type': 'documents', 'data': [
+    {'title': 'Abrechnung', 'detail': '02.01.2020', 'id': 'doc1', 'postboxType': 'SECURITIES_SETTLEMENT',
+     'action': {'type': 'browserModal', 'payload': 'https://example.invalid/doc.pdf'}}]}
+
+
 def new_detail(units, price, fee='Kostenlos', isin=ISIN):
     """The layout of TRADING_* events: units and price on the info page behind the Transaktion row."""
     info = {'sections': [{'title': 'Transaktion', 'type': 'header', 'data': {'status': 'executed'}},
@@ -170,7 +175,7 @@ def new_detail(units, price, fee='Kostenlos', isin=ISIN):
                    'detail': {'type': 'text', 'text': f'{units} ×  {price}{NB}€',
                               'action': {'type': 'infoPage', 'payload': info}}}
     return {'id': 'd', 'sections': [header(isin), {'title': 'Übersicht', 'type': 'table', 'data': [
-        row('Sparplan', 'Ausgeführt'), transaktion, row('Gebühr', fee), row('Summe', f'50,00{NB}€')]}]}
+        row('Sparplan', 'Ausgeführt'), transaktion, row('Gebühr', fee), row('Summe', f'50,00{NB}€')]}, DOCUMENTS]}
 
 
 def old_detail(units, price, fee, isin=ISIN):
@@ -179,7 +184,7 @@ def old_detail(units, price, fee, isin=ISIN):
                                     {'title': 'Übersicht', 'type': 'table', 'data': [row('Status', 'Ausgeführt'), row('Orderart', 'Kauf')]},
                                     {'title': 'Transaktion', 'type': 'table', 'data': [
                                         row('Anteile', units), row('Aktienkurs', f'{price}{NB}€'),
-                                        row('Gebühr', f'{fee}{NB}€'), row('Gesamt', f'101,00{NB}€')]}]}
+                                        row('Gebühr', f'{fee}{NB}€'), row('Gesamt', f'101,00{NB}€')]}, DOCUMENTS]}
 
 
 class Trades(unittest.TestCase):

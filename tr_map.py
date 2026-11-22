@@ -164,10 +164,14 @@ def _rows(detail: dict) -> dict[str, str]:
         for section in sections if isinstance(sections, list) else []:
             data = section.get('data') if isinstance(section, dict) else None
             for r in data if isinstance(data, list) else []:
-                info = (r.get('detail') or {}).get('action') if isinstance(r, dict) else None
+                # A row's detail is usually an object; a document row's is plain text.
+                detail_of_row = r.get('detail') if isinstance(r, dict) else None
+                if not isinstance(detail_of_row, dict):
+                    continue
+                info = detail_of_row.get('action')
                 if isinstance(info, dict) and isinstance(info.get('payload'), dict):
                     walk(info['payload'].get('sections'))
-                text = (r.get('detail') or {}).get('text') if isinstance(r, dict) else None
+                text = detail_of_row.get('text')
                 if isinstance(text, str):
                     found.setdefault(str(r.get('title') or ''), text)
     walk(detail.get('sections') if isinstance(detail, dict) else None)

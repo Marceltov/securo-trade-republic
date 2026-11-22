@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import hmac
+import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
@@ -138,12 +139,17 @@ TRADE_EVENTS = frozenset({
 # Events that move units in a way not mapped yet: refusing them keeps the
 # history from silently not adding up.
 UNIT_EVENTS_REFUSED = frozenset({
-    'SSP_SECURITIES_TRANSFER_INCOMING', 'ACQUISITION_TRADE_PERK', 'IPO_SUBSCRIPTION_ALLOCATION',
+    'SSP_SECURITIES_TRANSFER_OUTGOING', 'ACQUISITION_TRADE_PERK', 'IPO_SUBSCRIPTION_ALLOCATION',
     'IPO_TRADE_EXECUTED', 'SSP_CORPORATE_ACTION_INVOICE_SHARES',
 })
+# Activity log entries that bring units in: a transfer from another bank
+# (no price: see price_transfers) and free shares Trade Republic gave.
+TRANSFER_IN = 'SSP_SECURITIES_TRANSFER_INCOMING'
+ACTIVITY_TRADE_EVENTS = frozenset({TRANSFER_IN, 'STOCK_PERK_REFUNDED'})
+ISIN_IN_ICON = re.compile(r'logos/([A-Z]{2}[A-Z0-9]{9}[0-9])/')
 # Bought for you (Saveback, round-ups): a buy whatever the sign of its amount.
 BUY_ONLY_EVENTS = frozenset({'BENEFITS_SAVEBACK_EXECUTION', 'SAVEBACK_AGGREGATE',
-                             'BENEFITS_SPARE_CHANGE_EXECUTION', 'SPARE_CHANGE_AGGREGATE'})
+                             'BENEFITS_SPARE_CHANGE_EXECUTION', 'SPARE_CHANGE_AGGREGATE'}) | ACTIVITY_TRADE_EVENTS
 MICRO = Decimal('0.000001')
 FREE = {'kostenlos', 'gratis', 'free'}
 
@@ -153,7 +159,11 @@ def _detail_number(text, what: str) -> Decimal:
     cleaned = str(text or '').replace('\xa0', ' ').replace('€', '').strip()
     if cleaned.lower() in FREE:
         return Decimal(0)
-    return _decimal(cleaned.replace('.', '').replace(',', '.'), what)
+    if ',' in cleaned:  # German: "1.234,56"
+        return _decimal(cleaned.replace('.', '').replace(',', '.'), what)
+    if re.fullmatch(r'[1-9][0-9]{0,2}(\.[0-9]{3})+', cleaned):  # "1.234": thousands
+        return _decimal(cleaned.replace('.', ''), what)
+    return _decimal(cleaned, what)  # "0.022": free shares write a decimal point
 
 
 def _rows(detail: dict) -> dict[str, str]:
@@ -178,7 +188,16 @@ def _rows(detail: dict) -> dict[str, str]:
     return found
 
 
-def _isin(detail: dict) -> str:
+def _isin(detail: dict, event: dict | None = None) -> str:
+    """The security of a detail: its header's instrument link, else the event's logo (logos/<ISIN>/v2)."""
+    found = _header_isin(detail)
+    if not found and isinstance(event, dict):
+        match = ISIN_IN_ICON.search(str(event.get('icon') or ''))
+        found = match.group(1) if match else ''
+    return found
+
+
+def _header_isin(detail: dict) -> str:
     for section in detail.get('sections') or [] if isinstance(detail, dict) else []:
         action = section.get('action') if isinstance(section, dict) else None
         if section.get('type') == 'header' and isinstance(action, dict) and action.get('type') == 'instrumentDetail':
@@ -210,8 +229,8 @@ def trade_rows(events: list[dict], details: dict[str, dict], salt: str,
         if kind_of_event in UNIT_EVENTS_REFUSED:
             raise BankSyncError(f'Trade Republic sent a {_text(kind_of_event, 60)} event, which this plugin cannot map yet; '
                                 'nothing was imported')
-        if (kind_of_event not in TRADE_EVENTS or e.get('status') != 'EXECUTED' or e.get('deleted') or e.get('hidden')
-                or e['id'] in seen):
+        if (kind_of_event not in TRADE_EVENTS | ACTIVITY_TRADE_EVENTS or e.get('status') not in ('EXECUTED', None)
+                or e.get('deleted') or e.get('hidden') or e['id'] in seen):
             continue
         seen.add(e['id'])
         remembered_trade = known.get(trade_id(salt, e['id']))
@@ -222,17 +241,21 @@ def trade_rows(events: list[dict], details: dict[str, dict], salt: str,
         detail = details.get(e['id'])
         if not isinstance(detail, dict):
             raise BankSyncError('Trade Republic sent no detail for a trade; nothing was imported')
-        isin = _isin(detail)
+        isin = _isin(detail, e)
         if not isin:
             raise BankSyncError('Trade Republic sent a trade without its security; nothing was imported')
         rows = _rows(detail)
         units = rows.get('Aktien') or rows.get('Anteile') or rows.get('Shares')
         price = rows.get('Aktienkurs') or rows.get('Kurs') or rows.get('Price')
+        if kind_of_event == TRANSFER_IN:
+            price = ''  # priced by price_transfers from the position's average buy-in
         if units is None or price is None:
             raise BankSyncError(f'Trade Republic sent a {_text(kind_of_event, 60)} without units or price; nothing was imported')
         quantity = _detail_number(units, 'number of units')
-        amount = _decimal((e.get('amount') or {}).get('value'), 'amount')
         buy_only = kind_of_event in BUY_ONLY_EVENTS
+        raw_amount = (e.get('amount') or {}).get('value')
+        # Activity log entries (transfers, free shares) carry no amount.
+        amount = Decimal(0) if raw_amount is None and buy_only else _decimal(raw_amount, 'amount')
         if quantity <= 0 or (amount == 0 and not buy_only):
             raise BankSyncError(f'Trade Republic sent a {_text(kind_of_event, 60)} without units or amount; nothing was imported')
         trades.setdefault(isin, []).append({
@@ -240,7 +263,8 @@ def trade_rows(events: list[dict], details: dict[str, dict], salt: str,
             'kind': 'buy' if buy_only or amount < 0 else 'sell',
             'date': _day(e.get('timestamp')).isoformat(),
             'quantity': quantity,
-            'price': format(_detail_number(price, 'price').quantize(MICRO, rounding=ROUND_HALF_UP).normalize(), 'f'),
+            'price': None if kind_of_event == TRANSFER_IN else
+            format(_detail_number(price, 'price').quantize(MICRO, rounding=ROUND_HALF_UP).normalize(), 'f'),
             'fee': _money(abs(_detail_number(rows.get('Gebühr', '0'), 'fee'))),
         })
     for rows in trades.values():
@@ -269,6 +293,31 @@ def _round_units(rows: list[dict]) -> None:
         t['quantity'] = format(quantity.normalize(), 'f')
 
 
+def price_transfers(trades: dict[str, list[dict]], positions: dict[str, tuple[Decimal, Decimal]]) -> None:
+    """Price each transfer in from Trade Republic's average buy-in (`positions[isin]`: units held, average).
+
+    A transfer carries no price; Trade Republic keeps the cost it was told in
+    the position's average buy-in. What that average says the position cost,
+    less what its buys cost, is what the transferred units cost. Without a
+    held position, or with a sale in between (the average then no longer
+    adds up this way), the average itself is used, and 0 without either.
+    """
+    for isin, rows in trades.items():
+        transfers = [t for t in rows if t['price'] is None]
+        if not transfers:
+            continue
+        units, average = positions.get(isin, (Decimal(0), Decimal(0)))
+        price = average
+        moved = sum((Decimal(t['quantity']) for t in transfers), Decimal(0))
+        if units > 0 and moved > 0 and not any(t['kind'] == 'sell' for t in rows):
+            bought = sum((Decimal(t['quantity']) * Decimal(t['price']) for t in rows if t['price'] is not None), Decimal(0))
+            implied = (units * average - bought) / moved
+            if implied > 0:
+                price = implied
+        for t in transfers:
+            t['price'] = format(price.quantize(MICRO, rounding=ROUND_HALF_UP).normalize(), 'f')
+
+
 TRADE_KEYS = {'external_id', 'kind', 'date', 'quantity', 'price', 'fee', 'isin'}
 
 
@@ -294,6 +343,11 @@ def closed_holding_rows(trades: dict[str, list[dict]], events: list[dict], salt:
     rows = []
     for isin, isin_trades in sorted(trades.items()):
         if isin in held:
+            continue
+        left = sum((Decimal(t['quantity']) * (1 if t['kind'] == 'buy' else -1) for t in isin_trades), Decimal(0))
+        if abs(left) > Decimal('0.0001'):
+            # Sold out but its trades don't come to zero (a split Trade
+            # Republic doesn't list): no history rather than a wrong one.
             continue
         name = next((names[t['external_id']] for t in isin_trades if names.get(t['external_id'])), isin)
         rows.append({'external_id': f'tr-pos-{isin}', 'name': name, 'currency': 'EUR', 'quantity': '0',

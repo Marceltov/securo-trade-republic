@@ -22,6 +22,7 @@ READS = {
     'timelineTransactions': {'items': [{'id': 'e1', 'timestamp': '2026-11-19T10:00:00.000+0000', 'title': 'Example Shop',
                                         'amount': {'currency': 'EUR', 'value': -5}, 'status': 'EXECUTED',
                                         'eventType': 'CARD_TRANSACTION'}], 'cursors': {}},
+    'timelineActivityLog': {'items': [], 'cursors': {}},
     'details': {'base': {'id': 'base', 'sections': [
         {'title': 'Du hast 20,00 € investiert', 'type': 'header', 'action': {'type': 'instrumentDetail', 'payload': 'US0000000001'}},
         {'title': 'Transaktion', 'type': 'table', 'data': [
@@ -262,3 +263,16 @@ class Trades(unittest.TestCase):
         with with_timeline([trade_event('t0', 'ORDER_EXECUTED', -20.0), e], {'t0': old_detail('2', '10,00', '0', isin=POS)}):
             sync()
         self.assertNotIn({'id': 'del'}, [p for kind, p in FakeSession.instances[-1].reads if kind == 'timelineDetailV2'])
+
+    def test_a_transfer_in_from_the_activity_log_makes_a_position_add_up(self):
+        from tests.test_tr_map import activity_event, transfer_detail
+        saved = READS.get('timelineActivityLog')
+        READS['timelineActivityLog'] = {'items': [activity_event('tr', 'SSP_SECURITIES_TRANSFER_INCOMING', isin=POS)], 'cursors': {}}
+        try:
+            with with_timeline([trade_event('t0', 'ORDER_EXECUTED', -10.0)],
+                               {'t0': old_detail('1', '10,00', '0', isin=POS), 'tr': transfer_detail('1')}):
+                holding = sync()['data']['holdings'][0]
+        finally:
+            READS['timelineActivityLog'] = saved
+        self.assertEqual(sorted(t['quantity'] for t in holding['trades']), ['1', '1'])
+        self.assertTrue(all(t['price'] is not None for t in holding['trades']))

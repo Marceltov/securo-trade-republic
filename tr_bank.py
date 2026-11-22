@@ -13,7 +13,7 @@ import time
 from decimal import Decimal
 
 from tr_client import AuthError, BankSyncError, NeedsAuth, TrSession, normalize_phone
-from tr_map import TRADE_EVENTS, _day as _event_day_of, check_trades_add_up, closed_holding_rows, remembered, trade_id, valid_known, account_row, holding_rows, paged_events, trade_rows, transaction_rows
+from tr_map import ACTIVITY_TRADE_EVENTS, TRADE_EVENTS, price_transfers, _day as _event_day_of, check_trades_add_up, closed_holding_rows, remembered, trade_id, valid_known, account_row, holding_rows, paged_events, trade_rows, transaction_rows
 
 __all__ = ['AuthError', 'BankSyncError', 'NeedsAuth', 'Plugin', 'plugin']
 
@@ -88,6 +88,11 @@ def _known_trades(params) -> dict:
     return valid_known(known) if isinstance(known, dict) else {}
 
 
+def _units_and_average(holding: dict) -> tuple[Decimal, Decimal]:
+    units = Decimal(holding['quantity'])
+    return units, (Decimal(holding['purchase_price']) / units if units else Decimal(0))
+
+
 def _event_day(event: dict) -> dt.date:
     return _event_day_of(event.get('timestamp'))
 
@@ -120,10 +125,16 @@ class Plugin:
             events = await paged_events(page, None)
             account['transactions'] = transaction_rows(
                 [e for e in events if since is None or _event_day(e) >= since])
+            async def activity_page(after):
+                return await session.read('timelineActivityLog', {'after': after} if after else None)
+            # Transfers in and free shares are only in the activity log.
+            activity = [e for e in await paged_events(activity_page, None)
+                        if isinstance(e, dict) and e.get('eventType') in ACTIVITY_TRADE_EVENTS]
+            events_with_units = events + activity
             known = _known_trades(params)
             details, complete = {}, True
-            for e in events:
-                if (e.get('eventType') in TRADE_EVENTS and e.get('status') == 'EXECUTED'
+            for e in events_with_units:
+                if (e.get('eventType') in TRADE_EVENTS | ACTIVITY_TRADE_EVENTS and e.get('status') in ('EXECUTED', None)
                         and not e.get('deleted') and not e.get('hidden')
                         and e['id'] not in details and trade_id(salt, e['id']) not in known):
                     details[e['id']] = await session.read('timelineDetailV2', {'id': e['id']})
@@ -131,17 +142,19 @@ class Plugin:
                         complete = False
                         break
             if complete:
-                trades = trade_rows(events, details, salt, known)
+                trades = trade_rows(events_with_units, details, salt, known)
+                price_transfers(trades, {h['isin']: _units_and_average(h) for h in holdings})
                 for holding in holdings:
                     holding['trades'] = trades.get(holding['isin'], [])
                 # Positions sold out come in closed, with their trades.
-                holdings += closed_holding_rows(trades, events, salt, {h['isin'] for h in holdings})
+                holdings += closed_holding_rows(trades, events_with_units, salt, {h['isin'] for h in holdings})
                 check_trades_add_up(holdings, trades)
             else:
                 # Holdings go without trades this time (Securo keeps their
                 # ledger); the details read so far are remembered.
-                read = [e for e in events if e.get('id') in details or trade_id(salt, e.get('id')) in known]
+                read = [e for e in events_with_units if e.get('id') in details or trade_id(salt, e.get('id')) in known]
                 trades = trade_rows(read, details, salt, known)
+                price_transfers(trades, {h['isin']: _units_and_average(h) for h in holdings})
         except (NeedsAuth, AuthError, BankSyncError):
             raise
         except Exception as exc:  # noqa: BLE001 - never pass a foreign message on: it may carry secrets

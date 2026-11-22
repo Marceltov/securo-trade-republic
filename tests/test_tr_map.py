@@ -215,8 +215,8 @@ class Trades(unittest.TestCase):
 
     def test_unknown_unit_event_fails_naming_it(self):
         with self.assertRaises(c.BankSyncError) as caught:
-            m.trade_rows([trade_event('t', 'SSP_SECURITIES_TRANSFER_INCOMING', 0.0)], {}, SALT)
-        self.assertIn('SSP_SECURITIES_TRANSFER_INCOMING', str(caught.exception))
+            m.trade_rows([trade_event('t', 'SSP_SECURITIES_TRANSFER_OUTGOING', 0.0)], {}, SALT)
+        self.assertIn('SSP_SECURITIES_TRANSFER_OUTGOING', str(caught.exception))
 
     def test_trade_detail_without_units_fails(self):
         detail = old_detail('2', '50,00', '1,00')
@@ -296,3 +296,51 @@ class ClosedPositions(unittest.TestCase):
     def test_a_held_position_is_not_reported_closed(self):
         trades = m.trade_rows([trade_event('b')], {'b': new_detail('2', '10,00')}, SALT)
         self.assertEqual(m.closed_holding_rows(trades, [trade_event('b')], SALT, held={ISIN}), [])
+
+
+def activity_event(id_, event_type, isin=ISIN, ts='2020-03-01T09:00:00.000+0000', status='EXECUTED'):
+    return {'id': id_, 'timestamp': ts, 'title': 'Example ETF', 'subtitle': 'Aktien erhalten', 'eventType': event_type,
+            'status': status, 'icon': f'logos/{isin}/v2', 'hidden': False, 'deleted': False}
+
+
+def transfer_detail(units):
+    return {'id': 'd', 'sections': [
+        {'title': f'Du hast {units} Aktien erhalten', 'type': 'header', 'data': {'icon': 'logos/x/v2'}},
+        {'title': 'Überblick', 'type': 'table', 'data': [row('Status', 'Abgeschlossen'), row('Aktion', 'Übertragung von Wertpapieren')]},
+        {'title': 'Transaktion', 'type': 'table', 'data': [row('Aktien', units), row('Gebühr', 'Kostenlos')]}]}
+
+
+def perk_detail(units, price, isin=ISIN):
+    return {'id': 'd', 'sections': [
+        {'title': 'Gratisaktien eingelöst', 'type': 'header', 'action': {'type': 'instrumentDetail', 'payload': isin}},
+        {'title': 'Transaktion', 'type': 'table', 'data': [row('Anteile', units), row('Aktienkurs', f'{price}{NB}€')]},
+        DOCUMENTS]}
+
+
+class Activity(unittest.TestCase):
+    def test_numbers_with_a_decimal_point_are_read_as_decimals(self):
+        self.assertEqual(m._detail_number('0.022', 'x'), Decimal('0.022'))
+        self.assertEqual(m._detail_number('0.0068', 'x'), Decimal('0.0068'))
+        self.assertEqual(m._detail_number('1.234', 'x'), Decimal('1234'))
+        self.assertEqual(m._detail_number(f'1.234,56{NB}€', 'x'), Decimal('1234.56'))
+
+    def test_free_shares_are_a_buy_at_their_price(self):
+        t = m.trade_rows([activity_event('p', 'STOCK_PERK_REFUNDED')], {'p': perk_detail('0.022', '222,80')}, SALT)[ISIN][0]
+        self.assertEqual((t['kind'], t['quantity'], t['price'], t['date']), ('buy', '0.022', '222.8', '2020-03-01'))
+
+    def test_a_transfer_in_is_a_buy_found_by_its_icon_and_priced_later(self):
+        t = m.trade_rows([activity_event('t', 'SSP_SECURITIES_TRANSFER_INCOMING')], {'t': transfer_detail('4')}, SALT)[ISIN][0]
+        self.assertEqual((t['kind'], t['quantity'], t['price']), ('buy', '4', None))
+
+    def test_a_transfer_is_priced_from_the_average_buy_in(self):
+        trades = m.trade_rows([trade_event('b', value=-20.0), activity_event('t', 'SSP_SECURITIES_TRANSFER_INCOMING')],
+                              {'b': new_detail('2', '10,00'), 't': transfer_detail('4')}, SALT)
+        # 6 units held at an average of 12: 72 invested, 20 of it by the buy -> 52 / 4 = 13 per transferred unit
+        m.price_transfers(trades, {ISIN: (Decimal('6'), Decimal('12'))})
+        transfer = next(t for t in trades[ISIN] if t['quantity'] == '4')
+        self.assertEqual(transfer['price'], '13')
+
+    def test_a_closed_position_that_does_not_add_up_is_left_out(self):
+        trades = m.trade_rows([activity_event('p', 'STOCK_PERK_REFUNDED'), trade_event('s', 'TRADING_TRADE_EXECUTED', 5.0)],
+                              {'p': perk_detail('0.0068', '778,00'), 's': new_detail('0,0204', '250,00')}, SALT)
+        self.assertEqual(m.closed_holding_rows(trades, [], SALT, held=set()), [])

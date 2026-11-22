@@ -25,7 +25,8 @@ WEB_PLATFORM = 'web-pro'
 COOKIE_NAMES = frozenset({'tr_session', 'tr_refresh', 'tr_device', 'tr_claims', 'tr_external_id', 'JSESSIONID'})
 POLL_SECONDS = 2
 # Everything this client can subscribe to. None of them changes anything at Trade Republic.
-ALLOWED_SUBSCRIPTIONS = frozenset({'cash', 'compactPortfolioByType', 'timelineTransactions', 'timelineDetailV2', 'instrument', 'ticker'})
+ALLOWED_SUBSCRIPTIONS = frozenset({'cash', 'compactPortfolioByType', 'timelineTransactions', 'timelineActivityLog',
+                                   'timelineDetailV2', 'instrument', 'ticker'})
 WS_CONNECT = {'locale': 'de', 'platformId': 'webtrading', 'platformVersion': 'chrome - 146.0.0.0',
               'clientId': 'app.traderepublic.com', 'clientVersion': '5582'}
 HTTP_TIMEOUT = 15

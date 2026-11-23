@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import tr_client as c
+from trade_republic import client as c
 
 
 class FakeSocket:

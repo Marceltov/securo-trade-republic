@@ -14,8 +14,8 @@ import secrets as pysecrets
 import time
 from decimal import Decimal
 
-from tr_client import AuthError, BankSyncError, NeedsAuth, TrSession, normalize_phone
-from tr_map import (
+from trade_republic.client import AuthError, BankSyncError, NeedsAuth, TrSession, normalize_phone
+from trade_republic.mapping import (
     ACTIVITY_TRADE_EVENTS,
     TRADE_EVENTS,
     account_row,
@@ -30,7 +30,7 @@ from tr_map import (
     transaction_rows,
     valid_known,
 )
-from tr_map import (
+from trade_republic.mapping import (
     _day as _event_day_of,
 )
 
@@ -101,7 +101,7 @@ async def _prices(session, portfolio: dict) -> tuple[dict[str, Decimal], dict[st
 
 
 def _known_trades(params) -> dict:
-    """Trades read on an earlier sync (see tr_map.remembered); anything unexpected is ignored and read again."""
+    """Trades read on an earlier sync (see mapping.remembered); anything unexpected is ignored and read again."""
     state = (params or {}).get("state")
     known = state.get("trades") if isinstance(state, dict) else None
     return valid_known(known) if isinstance(known, dict) else {}

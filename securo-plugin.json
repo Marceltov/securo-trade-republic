@@ -16,7 +16,7 @@
     "personal"
   ],
   "runtime": {
-    "entrypoint": "tr_bank:plugin",
+    "entrypoint": "trade_republic.plugin:plugin",
     "lockfile": "requirements.txt"
   },
   "network": [

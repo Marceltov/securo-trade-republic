@@ -14,7 +14,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
-from tr_client import BankSyncError
+from trade_republic.client import BankSyncError
 
 BERLIN = ZoneInfo("Europe/Berlin")
 CENT = Decimal("0.01")

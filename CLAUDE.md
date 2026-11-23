@@ -5,16 +5,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 securo-trade-republic: a read-only Securo plugin that syncs Trade Republic (cash account, depot positions, each position's trades) through Trade Republic's web login.
 
 ## Commands
-- `uv sync`, then `uv run pytest -q` (one test: `uv run pytest -q tests/test_tr_map.py -k name`).
+- `uv sync`, then `uv run pytest -q` (one test: `uv run pytest -q tests/test_mapping.py -k name`).
 - `uv run ruff format`, `uv run ruff check --fix`; CI runs `ruff check`, `ruff format --check` and pytest.
 - After any change to `uv.lock`: `uv export --frozen --no-dev --no-emit-project --no-header --format requirements-txt > requirements.txt` (a test fails otherwise). Securo's runner installs that file and refuses anything but hash-pinned index packages.
 - Release: bump `version` in `pyproject.toml` and `securo-plugin.json`, then `git tag -a vX.Y.Z -m "<headline>" && git push origin vX.Y.Z`.
 
 ## Architecture
-- `tr_bank.py`: `plugin.sync`, Securo's entrypoint (`tr_bank:plugin`); credentials, state and the order of reads.
-- `tr_client.py`: the only module that talks to Trade Republic: the web login and the websocket. `ALLOWED_SUBSCRIPTIONS` is the whole list of what it may read.
-- `tr_map.py`: Trade Republic's answers as Securo contract 1 records (accounts, transactions, holdings, trades): pure functions.
-- Modules are flat with a `tr_` prefix: Securo's runner puts the repository root first on the import path, so a plain `client.py` would shadow a dependency's module of that name.
+- `trade_republic/plugin.py`: `plugin.sync`, Securo's entrypoint (`trade_republic.plugin:plugin`); credentials, state and the order of reads.
+- `trade_republic/client.py`: the only module that talks to Trade Republic: the web login and the websocket. `ALLOWED_SUBSCRIPTIONS` is the whole list of what it may read.
+- `trade_republic/mapping.py`: Trade Republic's answers as Securo contract 1 records (accounts, transactions, holdings, trades): pure functions.
+- One package, `trade_republic/`, like the ING plugin's: Securo's runner puts the repository root first on the import path, so loose modules named `client.py` or `mapping.py` would shadow a dependency's module of that name.
 
 ## Rules
 - Follows Marceltov/engineering-conventions; the rules here win where they differ. No docs site: the README is the documentation (Securo's catalog shows it).

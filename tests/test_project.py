@@ -46,3 +46,11 @@ def test_every_manifest_text_is_in_english_and_german():
     texts = list(_texts(json.loads((ROOT / "securo-plugin.json").read_text())))
     assert len(texts) >= 6
     assert all(set(t) == {"en", "de"} and all(t.values()) for t in texts)
+
+
+def test_entrypoint_resolves_as_the_runner_loads_it():
+    """Securo's runner imports `module:attribute` with the repository root on the import path."""
+    import importlib
+
+    module, _, attribute = json.loads((ROOT / "securo-plugin.json").read_text())["runtime"]["entrypoint"].partition(":")
+    assert callable(getattr(importlib.import_module(module), attribute).sync)

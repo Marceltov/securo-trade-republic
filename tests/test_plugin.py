@@ -7,8 +7,8 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import tr_bank as b
-import tr_client as c
+from trade_republic import client as c
+from trade_republic import plugin as b
 
 PHONE, PIN = "+491701234567", "9876"
 SALT = "ab" * 32
@@ -202,7 +202,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-from tests.test_tr_map import old_detail, trade_event  # noqa: E402
+from tests.test_mapping import old_detail, trade_event  # noqa: E402
 
 POS = "US0000000001"
 
@@ -308,7 +308,7 @@ class Trades(unittest.TestCase):
         self.assertNotIn({"id": "del"}, [p for kind, p in FakeSession.instances[-1].reads if kind == "timelineDetailV2"])
 
     def test_a_transfer_in_from_the_activity_log_makes_a_position_add_up(self):
-        from tests.test_tr_map import activity_event, transfer_detail
+        from tests.test_mapping import activity_event, transfer_detail
 
         saved = READS.get("timelineActivityLog")
         READS["timelineActivityLog"] = {"items": [activity_event("tr", "SSP_SECURITIES_TRANSFER_INCOMING", isin=POS)], "cursors": {}}

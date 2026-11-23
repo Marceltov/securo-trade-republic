@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import tr_client as c
+from trade_republic import client as c
 
 PHONE = "+491701234567"
 PIN = "9876"
@@ -163,7 +163,7 @@ if __name__ == "__main__":
 def test_library_logs_never_reach_stderr(capfd):
     import logging
 
-    import tr_client  # noqa: F401  (importing it silences the loggers)
+    import trade_republic.client  # noqa: F401  (importing it silences the loggers)
 
     for name in ("websockets.client", "requests", "urllib3.connectionpool"):
         logging.getLogger(name).error("server said +4915112345678 Erika Mustermann")

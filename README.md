@@ -29,7 +29,7 @@ No FinTS registration is needed: Trade Republic has no FinTS, and the plugin use
 
 ## Safety
 
-- **Read-only by construction.** The client can subscribe to `cash`, `compactPortfolioByType`, `timelineTransactions`, `timelineActivityLog`, `timelineDetailV2`, `instrument` and `ticker` only (`ALLOWED_SUBSCRIPTIONS` in `tr_client.py`); there is no code for orders, savings plans or payouts.
+- **Read-only by construction.** The client can subscribe to `cash`, `compactPortfolioByType`, `timelineTransactions`, `timelineActivityLog`, `timelineDetailV2`, `instrument` and `ticker` only (`ALLOWED_SUBSCRIPTIONS` in `trade_republic/client.py`); there is no code for orders, savings plans or payouts.
 - **The login itself is not read-only.** A Trade Republic web session can trade. Securo keeps it in the connection's sealed secrets; treat your Securo server accordingly.
 - **Fails closed.** An answer this plugin does not recognise fails the sync; it never reports an empty list (Securo would archive what it already has).
 - Error messages never carry the phone number, PIN, session or account number.

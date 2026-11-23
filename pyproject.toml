@@ -1,0 +1,20 @@
+[project]
+name = "securo-trade-republic"
+version = "0.2.2"
+description = "Read-only Trade Republic plugin for Securo"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+dependencies = ["requests", "websockets>=15"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -10,6 +10,6 @@ jobs:
   pip-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
       - run: uvx pip-audit --strict --require-hashes --disable-pip -r requirements.txt

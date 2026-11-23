@@ -13,6 +13,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import logging
 import re
 import time
 import urllib.parse
@@ -26,6 +27,13 @@ WEB_PLATFORM = "web-pro"
 COOKIE_NAMES = frozenset({"tr_session", "tr_refresh", "tr_device", "tr_claims", "tr_external_id", "JSESSIONID"})
 POLL_SECONDS = 2
 # Everything this client can subscribe to. None of them changes anything at Trade Republic.
+# websockets, requests and urllib3 log failures with tracebacks, which can carry what Trade Republic sent. Securo's
+# runner keeps what reaches stderr, so these loggers write nowhere.
+for _name in ("websockets", "requests", "urllib3"):
+    _logger = logging.getLogger(_name)
+    _logger.addHandler(logging.NullHandler())
+    _logger.propagate = False
+
 ALLOWED_SUBSCRIPTIONS = frozenset({"cash", "compactPortfolioByType", "timelineTransactions", "timelineActivityLog", "timelineDetailV2", "instrument", "ticker"})
 WS_CONNECT = {"locale": "de", "platformId": "webtrading", "platformVersion": "chrome - 146.0.0.0", "clientId": "app.traderepublic.com", "clientVersion": "5582"}
 HTTP_TIMEOUT = 15

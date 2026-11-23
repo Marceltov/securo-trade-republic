@@ -36,10 +36,15 @@ No FinTS registration is needed: Trade Republic has no FinTS, and the plugin use
 
 ## Development
 
+Securo's plugin runner runs Python 3.14, and so does this code.
+
 ```sh
-uv run --python 3.14 --with requests --with 'websockets>=15' python -m unittest discover -s tests
-./generate-lock.sh   # hashed requirements.txt for Securo's runner
+uv sync
+uv run pytest -q
+uv run ruff check && uv run ruff format --check
 ```
+
+`requirements.txt` is what Securo's runner installs; after a change to `uv.lock`, regenerate it with `uv export --frozen --no-dev --no-emit-project --no-header --format requirements-txt > requirements.txt`. Decisions are in [`docs/adr/`](docs/adr/).
 
 The login and websocket protocol follow [pytr](https://github.com/pytr-org/pytr) (MIT), reduced to what a read-only sync needs.
 

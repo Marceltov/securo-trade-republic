@@ -158,3 +158,14 @@ class Renew(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_library_logs_never_reach_stderr(capfd):
+    import logging
+
+    import tr_client  # noqa: F401  (importing it silences the loggers)
+
+    for name in ("websockets.client", "requests", "urllib3.connectionpool"):
+        logging.getLogger(name).error("server said +4915112345678 Erika Mustermann")
+    captured = capfd.readouterr()
+    assert "Erika" not in captured.err + captured.out

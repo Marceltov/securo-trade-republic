@@ -52,7 +52,7 @@ def _day(timestamp) -> dt.date:
         except ValueError:
             raise BankSyncError("Trade Republic sent an event without a readable date; nothing was imported") from None
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=dt.timezone.utc)
+        moment = moment.replace(tzinfo=dt.UTC)
     return moment.astimezone(BERLIN).date()
 
 
@@ -307,10 +307,7 @@ def _round_units(rows: list[dict]) -> None:
     """
     exact = previous = Decimal(0)
     for t in sorted(rows, key=lambda t: (t["date"], t["kind"] != "buy", t["external_id"])):
-        if isinstance(t["quantity"], str):
-            step = Decimal(t["quantity"])
-        else:
-            step = t["quantity"]
+        step = Decimal(t["quantity"]) if isinstance(t["quantity"], str) else t["quantity"]
         exact += step if t["kind"] == "buy" else -step
         position = exact.quantize(MICRO, rounding=ROUND_HALF_UP)
         quantity = abs(position - previous) or MICRO

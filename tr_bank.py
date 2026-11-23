@@ -7,6 +7,7 @@ Syncs only when a person presses Sync (no schedule in the manifest): a login las
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import secrets as pysecrets
@@ -17,18 +18,20 @@ from tr_client import AuthError, BankSyncError, NeedsAuth, TrSession, normalize_
 from tr_map import (
     ACTIVITY_TRADE_EVENTS,
     TRADE_EVENTS,
-    price_transfers,
-    _day as _event_day_of,
+    account_row,
     check_trades_add_up,
     closed_holding_rows,
-    remembered,
-    trade_id,
-    valid_known,
-    account_row,
     holding_rows,
     paged_events,
+    price_transfers,
+    remembered,
+    trade_id,
     trade_rows,
     transaction_rows,
+    valid_known,
+)
+from tr_map import (
+    _day as _event_day_of,
 )
 
 __all__ = ["AuthError", "BankSyncError", "NeedsAuth", "Plugin", "plugin"]
@@ -179,13 +182,11 @@ class Plugin:
                 price_transfers(trades, {h["isin"]: _units_and_average(h) for h in holdings})
         except NeedsAuth, AuthError, BankSyncError:
             raise
-        except Exception as exc:  # noqa: BLE001 - never pass a foreign message on: it may carry secrets
+        except Exception as exc:
             raise BankSyncError(f"Trade Republic sync failed ({type(exc).__name__}); nothing was changed") from None
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 await session.close()
-            except Exception:  # noqa: BLE001
-                pass
         return {
             "secrets": {"id_salt": salt, "session": json.dumps(session.cookies)},
             "state": {"trades": remembered(trades)},

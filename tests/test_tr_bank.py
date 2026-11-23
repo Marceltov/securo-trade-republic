@@ -4,6 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tr_bank as b
@@ -69,7 +70,7 @@ READS["timelineTransactions"]["items"].append(
 
 
 class FakeSession:
-    instances = []
+    instances: ClassVar[list] = []
 
     def __init__(self, phone, pin, cookies, renews=True, login_error=None, read_error=None):
         self.phone, self.pin = phone, pin
@@ -117,7 +118,10 @@ def context(secrets=None):
 
 def sync(params=None, ctx=None, clock=None, **session_kw):
     FakeSession.instances.clear()
-    factory = lambda phone, pin, cookies: FakeSession(phone, pin, cookies, **session_kw)
+
+    def factory(phone, pin, cookies):
+        return FakeSession(phone, pin, cookies, **session_kw)
+
     plugin = b.Plugin(session_factory=factory, **({"clock": clock} if clock else {}))
     return asyncio.run(plugin.sync(params or {}, ctx or context()))
 
@@ -247,15 +251,16 @@ class Trades(unittest.TestCase):
         self.assertEqual(sorted(detail_reads), ["t1", "t2"])
 
     def test_trades_that_do_not_add_up_fail_naming_the_position(self):
-        with with_timeline([trade_event("t1", "ORDER_EXECUTED", -11.0)], {"t1": old_detail("1,5", "7,00", "1,00", isin=POS)}):
-            with self.assertRaises(c.BankSyncError) as caught:
-                sync()
+        with (
+            with_timeline([trade_event("t1", "ORDER_EXECUTED", -11.0)], {"t1": old_detail("1,5", "7,00", "1,00", isin=POS)}),
+            self.assertRaises(c.BankSyncError) as caught,
+        ):
+            sync()
         self.assertIn(POS, str(caught.exception))
 
     def test_a_position_without_any_trade_fails(self):
-        with with_timeline([], {}):
-            with self.assertRaises(c.BankSyncError):
-                sync()
+        with with_timeline([], {}), self.assertRaises(c.BankSyncError):
+            sync()
 
     def test_a_slow_first_sync_leaves_trades_out_and_keeps_what_it_read(self):
         ticks = iter([0.0] + [100.0] * 50)

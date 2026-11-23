@@ -3,6 +3,7 @@ import unittest
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tr_client as c
@@ -96,7 +97,7 @@ class Paging(unittest.TestCase):
         self.assertEqual(calls, [None, "c1"])
 
     def test_paging_stops_on_repeated_cursor(self):
-        events, calls = self.run_paged(
+        _events, calls = self.run_paged(
             [
                 {"items": [event("a")], "cursors": {"after": "c1"}},
                 {"items": [event("b")], "cursors": {"after": "c1"}},
@@ -138,8 +139,8 @@ def position(isin, size="2.5", itype="stock"):
 
 
 class Holdings(unittest.TestCase):
-    PRICES = {"US0000000001": Decimal("100"), "IE0000000002": Decimal("50.5"), "XF0000000003": Decimal("80000")}
-    TYPES = {"US0000000001": "stock", "IE0000000002": "fund", "XF0000000003": "crypto"}
+    PRICES: ClassVar[dict] = {"US0000000001": Decimal("100"), "IE0000000002": Decimal("50.5"), "XF0000000003": Decimal("80000")}
+    TYPES: ClassVar[dict] = {"US0000000001": "stock", "IE0000000002": "fund", "XF0000000003": "crypto"}
 
     def test_holdings_from_categories(self):
         portfolio = {
@@ -223,7 +224,7 @@ def new_detail(units, price, fee="Kostenlos", isin=ISIN):
     transaktion = {
         "title": "Transaktion",
         "style": "plain",
-        "detail": {"type": "text", "text": f"{units} ×  {price}{NB}€", "action": {"type": "infoPage", "payload": info}},
+        "detail": {"type": "text", "text": f"{units} ×  {price}{NB}€", "action": {"type": "infoPage", "payload": info}},  # noqa: RUF001, Trade Republic writes a multiplication sign
     }
     return {
         "id": "d",

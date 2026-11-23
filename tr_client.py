@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
-import urllib.parse
 import json
 import re
 import time
+import urllib.parse
 
 HOST = "https://api.traderepublic.com"
 WS_URL = "wss://api.traderepublic.com"
@@ -214,7 +215,7 @@ class TrSession:
             self._ws = await connect(WS_URL, additional_headers={"Cookie": cookie}, user_agent_header=USER_AGENT, open_timeout=HTTP_TIMEOUT)
             await self._ws.send(f"connect 31 {json.dumps(WS_CONNECT)}")
             answer = await asyncio.wait_for(self._ws.recv(), HTTP_TIMEOUT)
-        except Exception as exc:  # noqa: BLE001 - any failure to connect is reported the same way
+        except Exception as exc:
             if isinstance(exc, BankSyncError):
                 raise
             raise BankSyncError(f"could not connect to Trade Republic ({type(exc).__name__})") from None
@@ -235,7 +236,7 @@ class TrSession:
             while True:
                 try:
                     message = await asyncio.wait_for(ws.recv(), timeout)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     raise BankSyncError(f"Trade Republic did not answer {kind} in time") from None
                 except Exception as exc:
                     raise BankSyncError(f"the connection to Trade Republic closed while reading {kind} ({type(exc).__name__})") from None
@@ -256,10 +257,8 @@ class TrSession:
                 except ValueError:
                     raise BankSyncError(f"Trade Republic sent an unreadable {kind}") from None
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 await ws.send(f"unsub {sub_id}")
-            except Exception:  # noqa: BLE001 - the answer is already in hand or the error is
-                pass
 
     async def close(self) -> None:
         if self._ws is not None:

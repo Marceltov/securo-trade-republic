@@ -34,7 +34,7 @@ jobs:
           format: cyclonedx-json
           output-file: securo-trade-republic-${{ github.ref_name }}.cdx.json
           upload-artifact: false
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: securo-trade-republic-*.tar.gz
       - name: Create the release

@@ -25,6 +25,8 @@ That is why the plugin has **no schedule**: Securo syncs it only when you press 
 
 Accounts that confirm logins with an authenticator code instead of the app are not supported.
 
+No FinTS registration is needed: Trade Republic has no FinTS, and the plugin uses the app's own login.
+
 ## Safety
 
 - **Read-only by construction.** The client can subscribe to `cash`, `compactPortfolioByType`, `timelineTransactions`, `timelineActivityLog`, `timelineDetailV2`, `instrument` and `ticker` only (`ALLOWED_SUBSCRIPTIONS` in `tr_client.py`); there is no code for orders, savings plans or payouts.
@@ -40,6 +42,10 @@ uv run --python 3.14 --with requests --with 'websockets>=15' python -m unittest 
 ```
 
 The login and websocket protocol follow [pytr](https://github.com/pytr-org/pytr) (MIT), reduced to what a read-only sync needs.
+
+## Other Securo plugins
+
+- [ING Germany (FinTS)](https://github.com/marceltov/securo-ing-fints): Girokonto with pending entries, Extra-Konten and Direkt-Depot positions. It needs a FinTS product registration; its README says how to get one.
 
 ## License
 

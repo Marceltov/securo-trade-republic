@@ -1,0 +1,9 @@
+# CodeQL scans the code that ships, not its tests. Test fixtures here hold invented phone numbers, names and Trade Republic answers on
+# purpose (to prove they never reach a log or an error), which CodeQL reports as leaks. Secret scanning still covers
+# the tests. Every pattern below matches test code only; tests/test_codeql_config.py checks that.
+name: securo-trade-republic
+paths-ignore:
+  - tests
+  - "**/test_*.py"
+  - "**/*_test.py"
+  - "**/conftest.py"

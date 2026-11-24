@@ -12,9 +12,7 @@
   "repository": "https://github.com/marceltov/securo-trade-republic",
   "license": "MIT",
   "min_securo_version": "0.20.0",
-  "workspaces": [
-    "personal"
-  ],
+  "workspaces": ["personal"],
   "runtime": {
     "entrypoint": "trade_republic.plugin:plugin",
     "lockfile": "requirements.txt"
@@ -59,12 +57,7 @@
             "secret": true
           }
         ],
-        "provides": [
-          "accounts",
-          "transactions",
-          "holdings",
-          "trades"
-        ]
+        "provides": ["accounts", "transactions", "holdings", "trades"]
       }
     ]
   }

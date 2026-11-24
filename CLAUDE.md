@@ -18,6 +18,7 @@ securo-trade-republic: a read-only Securo plugin that syncs Trade Republic (cash
 
 ## Rules
 - Follows Marceltov/engineering-conventions; the rules here win where they differ. No docs site: the README is the documentation (Securo's catalog shows it).
+- CodeQL runs from `.github/workflows/codeql.yml`, not GitHub's default setup, so that `.github/codeql/codeql-config.yml` can leave out the tests. `tests/test_codeql_config.py` fails if a pattern there would also leave out a file of `trade_republic/`; change the two together.
 - Read-only: no subscription for orders, savings plans or payouts may be added to `ALLOWED_SUBSCRIPTIONS`.
 - No phone number, PIN, session cookie, account number, name or amount in git, a test fixture, an error message or a log. Fixtures are invented values in Trade Republic's shapes.
 - An answer that can't be read fails the sync; it never returns an empty list in place of data it couldn't read.

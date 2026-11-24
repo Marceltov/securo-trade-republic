@@ -1,5 +1,5 @@
 name: codeql
-# Advanced setup instead of GitHub's default setup, which can't leave out paths: see .github/codeql/codeql-config.yml.
+# The shared workflow of Marceltov/engineering-conventions (repo-setup/security.md): CodeQL without the tests.
 on:
   push:
     branches: [main]
@@ -9,23 +9,11 @@ on:
 permissions:
   contents: read
 jobs:
-  analyze:
-    runs-on: ubuntu-latest
+  codeql:
     permissions:
       contents: read
       actions: read
       security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [python, actions]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: github/codeql-action/init@v4
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: none
-          config-file: ./.github/codeql/codeql-config.yml
-      - uses: github/codeql-action/analyze@v4
-        with:
-          category: /language:${{ matrix.language }}
+    uses: Marceltov/engineering-conventions/.github/workflows/codeql.yml@main
+    with:
+      languages: '["python", "actions"]'

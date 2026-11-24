@@ -18,6 +18,6 @@ Only the newest release gets fixes; there are no backports.
 ## How this repository watches
 
 - Private vulnerability reporting and secret scanning with push protection (also over the tests).
-- CodeQL through `.github/workflows/codeql.yml`, on every pull request, every push to `main` and weekly. It leaves out the tests (`.github/codeql/codeql-config.yml`): their fixtures hold invented personal data on purpose.
+- CodeQL through the shared workflow of Marceltov/engineering-conventions (`.github/workflows/codeql.yml` calls it), on every pull request, every push to `main` and weekly. It leaves out the tests: their fixtures hold invented personal data on purpose.
 - Dependabot alerts for every dependency; Dependabot pull requests for the dev tools and GitHub Actions.
 - A daily `pip-audit` of `requirements.txt` (`.github/workflows/audit.yml`).

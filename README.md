@@ -49,7 +49,7 @@ No FinTS registration is needed: Trade Republic has no FinTS, and the plugin use
 
 ## Pending entries
 
-A pending entry keeps its ID when Trade Republic books it, so Securo turns the row booked in place. An entry Trade Republic cancels leaves the timeline; Securo removes its row only for a plugin that declares a complete feed, which this one can from the Securo release with [securo#1728](https://github.com/securo-finance/securo/pull/1728) (merged, not yet released). On Securo 0.21.0 and older, a cancelled pending entry stays until you delete it.
+A pending entry keeps its ID when Trade Republic books it, so Securo turns the row booked in place. An entry Trade Republic cancels leaves the timeline; Securo removes its row only for a plugin that declares a complete feed, which this one can from the Securo release with [securo#1728](https://github.com/securo-finance/securo/pull/1728); with [securo#1772](https://github.com/securo-finance/securo/pull/1772) the row goes on the next sync rather than a week later (both merged, not yet released). On Securo 0.21.0 and older, a cancelled pending entry stays until you delete it.
 
 ## Safety
 
